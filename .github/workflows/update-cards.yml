@@ -1,0 +1,70 @@
+name: Kartendaten automatisch aktualisieren
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Jeden Montag, 06:00 UTC (ca. 7-8 Uhr deutsche Zeit)
+  workflow_dispatch: {}   # Zeigt euch zusätzlich einen manuellen "Run workflow"-Knopf in GitHub
+
+permissions:
+  contents: write  # Damit der Workflow Ergebnisse zurück ins Repo committen darf
+
+jobs:
+  update-cards:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - name: Repository auschecken
+        uses: actions/checkout@v4
+
+      - name: Rust installieren (für vegapull)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: vegapull installieren
+        run: cargo install vegapull
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Python-Pakete installieren
+        run: pip install torch torchvision pillow
+
+      - name: Bild-Cache wiederherstellen (spart Downloads bei jedem Lauf)
+        uses: actions/cache/restore@v4
+        with:
+          path: downloaded_images
+          key: card-images-${{ github.run_id }}
+          restore-keys: |
+            card-images-
+
+      - name: Kartendaten von der offiziellen Seite holen (alle Sprachen)
+        run: python build_punk_records.py --vegapull vegapull --language all --out-dir punk-records
+
+      - name: cards_by_id.json (Englisch) für die App-Pipeline bereitstellen
+        run: cp punk-records/english/index/cards_by_id.json cards_by_id.json
+
+      - name: App-fertiges cards.json erzeugen
+        run: python generate_cards_json.py
+
+      - name: Embeddings aktualisieren (nur wirklich neue Karten)
+        run: python generate_embeddings.py
+
+      - name: Bild-Cache sichern (inkl. neuer Bilder aus diesem Lauf)
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: downloaded_images
+          key: card-images-${{ github.run_id }}
+
+      - name: Änderungen committen, falls vorhanden
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add cards_by_id.json cards.json card_embeddings.json punk-records/*/index/
+          if git diff --staged --quiet; then
+            echo "Keine Änderungen - nichts zu committen."
+          else
+            git commit -m "Automatisches Kartendaten-Update"
+            git push
+          fi
