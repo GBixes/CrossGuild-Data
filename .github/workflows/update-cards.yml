@@ -39,7 +39,7 @@ jobs:
             card-images-
 
       - name: Kartendaten von der offiziellen Seite holen (alle Sprachen)
-        run: python build_punk_records.py --vegapull vegapull --language all --out-dir punk-records
+        run: python build_punk_records.py --vegapull vega --language all --out-dir punk-records
 
       - name: cards_by_id.json (Englisch) für die App-Pipeline bereitstellen
         run: cp punk-records/english/index/cards_by_id.json cards_by_id.json
