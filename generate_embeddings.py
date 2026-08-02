@@ -2,6 +2,7 @@ import json
 import os
 import urllib.request
 from io import BytesIO
+from pathlib import Path
 from PIL import Image
 import torch
 import torchvision.models as models
@@ -16,17 +17,13 @@ print("Modell erfolgreich initialisiert!\n")
 preprocess = transforms.Compose([
     transforms.Resize((224, 224)),
     transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    ),
+    transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
 def process_image_to_vector(image_bytes):
     try:
         img = Image.open(BytesIO(image_bytes)).convert('RGB')
         img_tensor = preprocess(img).unsqueeze(0)
-
         with torch.no_grad():
             x = model.features(img_tensor)
             x = model.avgpool(x)
@@ -37,11 +34,19 @@ def process_image_to_vector(image_bytes):
         print(f" -> Fehler bei der Bildverarbeitung: {e}")
         return None
 
+def set_id_from_card_id(card_id):
+    """Leitet den Set-Code aus der Karten-ID ab, z.B. 'OP01-001' -> 'OP01',
+    'ST02-016_r1' -> 'ST02'. Gleiche Logik wie packId in generate_cards_json.py."""
+    if card_id and "-" in card_id:
+        return card_id.split("-")[0]
+    return "unknown"
+
 def main():
     input_json_path = "cards_by_id.json"
-    output_json_path = "card_embeddings.json"
+    output_dir = Path("embeddings")
     cache_dir = "downloaded_images"
 
+    output_dir.mkdir(exist_ok=True)
     if not os.path.exists(cache_dir):
         os.makedirs(cache_dir)
 
@@ -62,15 +67,12 @@ def main():
     elif isinstance(cards_data, list):
         card_items = cards_data
 
-    # NEU: Bestehende Embeddings laden statt bei 0 anzufangen -
-    # dadurch verarbeiten wir nur wirklich neue Karten.
-    embeddings_database = {}
-    if os.path.exists(output_json_path):
-        with open(output_json_path, "r", encoding="utf-8") as f:
-            embeddings_database = json.load(f)
-        print(f"Bestehende Datei geladen: {len(embeddings_database)} Karten bereits vorhanden.\n")
+    # NEU: Pro Set eine eigene Datei statt einer riesigen - GitHub blockt
+    # ohnehin jede Datei über 100 MB komplett, das war die harte Grenze.
+    sets_in_memory = {}
+    modified_sets = set()
+    already_done_count = 0
 
-    already_done_count = len(embeddings_database)
     total_cards = len(card_items)
     new_count = 0
     skipped_count = 0
@@ -86,8 +88,18 @@ def main():
             skipped_count += 1
             continue
 
-        # NEU: Schon vorhanden? Überspringen - spart Downloads und Rechenzeit.
-        if card_id in embeddings_database:
+        set_id = set_id_from_card_id(card_id)
+
+        if set_id not in sets_in_memory:
+            set_file = output_dir / f"{set_id}.json"
+            if set_file.exists():
+                with open(set_file, "r", encoding="utf-8") as f:
+                    sets_in_memory[set_id] = json.load(f)
+                already_done_count += len(sets_in_memory[set_id])
+            else:
+                sets_in_memory[set_id] = {}
+
+        if card_id in sets_in_memory[set_id]:
             continue
 
         img_url = ""
@@ -130,26 +142,24 @@ def main():
         if image_bytes:
             vector = process_image_to_vector(image_bytes)
             if vector is not None:
-                embeddings_database[card_id] = vector
+                sets_in_memory[set_id][card_id] = vector
+                modified_sets.add(set_id)
                 new_count += 1
             else:
                 skipped_count += 1
+
+    for set_id in modified_sets:
+        set_file = output_dir / f"{set_id}.json"
+        with open(set_file, "w", encoding="utf-8") as f:
+            json.dump(sets_in_memory[set_id], f)
 
     print("\n" + "="*50)
     print(f"ABSCHLUSS-BERICHT:")
     print(f" -> Bereits vorhanden (übersprungen): {already_done_count}")
     print(f" -> Neu hinzugefügt: {new_count}")
     print(f" -> Übersprungen / fehlerhaft: {skipped_count}")
-    print(f" -> Gesamt in der Datei jetzt: {len(embeddings_database)}")
+    print(f" -> Aktualisierte Set-Dateien: {len(modified_sets)} (Ordner: {output_dir}/)")
     print("="*50)
-
-    if new_count > 0:
-        with open(output_json_path, "w", encoding="utf-8") as f:
-            json.dump(embeddings_database, f)
-        print(f"\nERFOLG! Datei aktualisiert: {output_json_path}")
-        print(f"{new_count} neue Karten hinzugefügt - alte Karten unverändert übernommen.")
-    else:
-        print("\nKeine neuen Karten gefunden - Datei wurde nicht verändert.")
 
 if __name__ == "__main__":
     main()
