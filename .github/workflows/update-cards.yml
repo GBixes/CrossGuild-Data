@@ -38,8 +38,12 @@ jobs:
           restore-keys: |
             card-images-
 
-      - name: Kartendaten von der offiziellen Seite holen (alle Sprachen)
-        run: python build_punk_records.py --vegapull vega --language all --out-dir punk-records
+      - name: Kartendaten von der offiziellen Seite holen (mehrere Sprachen)
+        run: |
+          for lang in english japanese french german; do
+            echo "--- Hole Kartendaten für $lang ---"
+            python build_punk_records.py --vegapull vega --language $lang --out-dir punk-records || echo "Fehler bei $lang (wird übersprungen)"
+          done
 
       - name: cards_by_id.json (Englisch) für die App-Pipeline bereitstellen
         run: cp punk-records/english/index/cards_by_id.json cards_by_id.json
@@ -66,5 +70,6 @@ jobs:
             echo "Keine Änderungen - nichts zu committen."
           else
             git commit -m "Automatisches Kartendaten-Update"
+            git pull origin main --rebase
             git push
           fi
